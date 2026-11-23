@@ -65,6 +65,42 @@ def state_file(slug):
     return ROOT / "state" / f"{slug}.json"
 
 
+def seen_file(slug):
+    return ROOT / "seen" / f"{slug}.json"
+
+
+def load_seen(show, eps):
+    """Every video ID already processed, so nothing is ever downloaded twice.
+
+    Seeded from the persistent ledger, the current state, and existing release
+    tags — that last source covers runs interrupted before the ledger was saved.
+    """
+    sf = seen_file(show["slug"])
+    seen = set()
+    if sf.exists():
+        try:
+            seen |= set(json.loads(sf.read_text()))
+        except (ValueError, TypeError):
+            pass
+    seen |= {e["id"] for e in eps}
+
+    prefix = f"{show['slug']}-yt-"
+    r = subprocess.run(
+        ["gh", "release", "list", "--repo", REPO, "--limit", "1000", "--json", "tagName"],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0:
+        try:
+            seen |= {
+                item["tagName"][len(prefix):]
+                for item in json.loads(r.stdout)
+                if item.get("tagName", "").startswith(prefix)
+            }
+        except (ValueError, TypeError):
+            pass
+    return sf, seen
+
+
 def ensure_cover(show):
     """Channel profile picture -> square cover.jpg for this show."""
     out_dir = feed_dir(show["slug"])
@@ -249,20 +285,23 @@ def main():
             sf = state_file(slug)
             sf.parent.mkdir(parents=True, exist_ok=True)
             eps = json.loads(sf.read_text()) if sf.exists() else []
-            known = {e["id"] for e in eps}
+            seen_sf, seen = load_seen(show, eps)
 
             if MAX_NEW > 0:
                 entries = list_channel(show)
                 todo = [
                     e for e in entries
-                    if e["id"] not in known and e.get("live_status") not in SKIP_LIVE
+                    if e["id"] not in seen and e.get("live_status") not in SKIP_LIVE
                 ][:MAX_NEW]
                 print(f"{len(entries)} scanned, {len(todo)} new to process")
                 for e in todo:
                     tmp = pathlib.Path(tempfile.mkdtemp())
                     try:
                         eps.append(make_episode(show, e["id"], tmp))
+                        seen.add(e["id"])
                         sf.write_text(json.dumps(eps, indent=1))
+                        seen_sf.parent.mkdir(parents=True, exist_ok=True)
+                        seen_sf.write_text(json.dumps(sorted(seen), indent=1))
                         print(f"done {e['id']}")
                     except Exception as ex:
                         failed += 1
@@ -272,6 +311,8 @@ def main():
 
             eps = prune(show, eps)
             sf.write_text(json.dumps(eps, indent=1))
+            seen_sf.parent.mkdir(parents=True, exist_ok=True)
+            seen_sf.write_text(json.dumps(sorted(seen), indent=1))
             feed_dir(slug).mkdir(parents=True, exist_ok=True)
             (feed_dir(slug) / "feed.xml").write_text(build_feed(show, eps))
             print(f"feed written with {len(eps[:FEED_N])} episodes "

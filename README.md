@@ -18,5 +18,6 @@ The hourly workflow in `.github/workflows/update.yml` runs `scripts/update.py`:
 - uploads one release per episode, tagged `<slug>-yt-<videoid>`
 - writes each show's feed to `feeds/<slug>/feed.xml` with the newest 20 episodes
 - keeps 100 episodes per show in `state/<slug>.json`, deleting older releases
+- records every processed video ID in `seen/<slug>.json`, so a video is never downloaded twice even after it leaves the feed or releases are pruned
 
 The `YT_COOKIES` repository secret is needed if YouTube challenges the runner with "Sign in to confirm you're not a bot". It is a Netscape-format `cookies.txt` exported while logged into YouTube. Never commit it.
