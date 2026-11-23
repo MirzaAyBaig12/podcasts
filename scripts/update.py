@@ -275,10 +275,62 @@ def build_index():
 """)
 
 
+def md(value):
+    """Make arbitrary text safe for a Markdown table cell."""
+    return " ".join(str(value or "").split()).replace("|", "\\|")
+
+
+def write_summary(rows):
+    """Write a per-show report into the GitHub Actions job summary."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+
+    lines = [
+        "## Podcast feed update",
+        "",
+        "| Podcast | New episodes | In feed | Kept | Status |",
+        "|---|---:|---:|---:|---|",
+    ]
+    for r in rows:
+        ok = not r["failed"] and not r["show_error"]
+        lines.append(
+            f"| {md(r['title'])} | {len(r['new'])} | {r['feed_count']} | "
+            f"{r['kept']} | {'✅ OK' if ok else '⚠️ Failed'} |"
+        )
+
+    lines += ["", "### Details", ""]
+    for r in rows:
+        lines.append(f"#### {md(r['title'])} (`{r['slug']}`)")
+        if r["show_error"]:
+            lines.append(f"- **Show failed:** {md(r['show_error'])}")
+        if r["new"]:
+            for vid, title in r["new"]:
+                lines.append(f"- Added: **{md(title)}** (`{vid}`)")
+        else:
+            lines.append("- No new episodes")
+        for vid, error in r["failed"]:
+            lines.append(f"- **Failed:** `{vid}` — {md(error)}")
+        lines.append("")
+
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
 def main():
     failed = 0
+    summary = []
     for show in CFG["shows"]:
         slug = show["slug"]
+        row = {
+            "slug": slug,
+            "title": show["title"],
+            "new": [],
+            "failed": [],
+            "show_error": "",
+            "feed_count": 0,
+            "kept": 0,
+        }
         print(f"=== {slug} ===")
         try:
             ensure_cover(show)
@@ -297,14 +349,17 @@ def main():
                 for e in todo:
                     tmp = pathlib.Path(tempfile.mkdtemp())
                     try:
-                        eps.append(make_episode(show, e["id"], tmp))
+                        ep = make_episode(show, e["id"], tmp)
+                        eps.append(ep)
                         seen.add(e["id"])
                         sf.write_text(json.dumps(eps, indent=1))
                         seen_sf.parent.mkdir(parents=True, exist_ok=True)
                         seen_sf.write_text(json.dumps(sorted(seen), indent=1))
+                        row["new"].append((e["id"], ep["title"]))
                         print(f"done {e['id']}")
                     except Exception as ex:
                         failed += 1
+                        row["failed"].append((e["id"], str(ex)))
                         print(f"FAILED {e['id']}: {ex}", file=sys.stderr)
                     finally:
                         shutil.rmtree(tmp, ignore_errors=True)
@@ -315,13 +370,19 @@ def main():
             seen_sf.write_text(json.dumps(sorted(seen), indent=1))
             feed_dir(slug).mkdir(parents=True, exist_ok=True)
             (feed_dir(slug) / "feed.xml").write_text(build_feed(show, eps))
-            print(f"feed written with {len(eps[:FEED_N])} episodes "
-                  f"({len(eps)} kept in state)")
+            row["feed_count"] = len(eps[:FEED_N])
+            row["kept"] = len(eps)
+            print(f"feed written with {row['feed_count']} episodes "
+                  f"({row['kept']} kept in state)")
         except Exception as ex:
             failed += 1
+            row["show_error"] = str(ex)
             print(f"FAILED show {slug}: {ex}", file=sys.stderr)
+        finally:
+            summary.append(row)
 
     build_index()
+    write_summary(summary)
     sys.exit(1 if failed else 0)
 
 

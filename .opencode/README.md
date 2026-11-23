@@ -45,6 +45,10 @@ cookies.txt              NEVER committed (gitignored; CI writes from secret)
 - workflow cron: `0 * * * *` (hourly)
 - release tags: `<slug>-yt-<videoid>` (namespaced so IDs can't collide)
 
+## CI summary
+
+Every run writes a Markdown table to GitHub's job summary ($GITHUB_STEP_SUMMARY): one row per show with new-episode count, feed count, kept count, and status, followed by details listing each added video title/ID and any failed video or show-level error with its message. The run still exits non-zero if anything failed.
+
 ## Description handling
 
 - Podcast/channel `<description>` was **pulled once** from each YouTube channel's About text and written into `config.json`. It is not refetched every run.
