@@ -36,6 +36,12 @@ def run(cmd, **kw):
     return subprocess.run(cmd, check=True, text=True, **kw)
 
 
+def clean_text(value):
+    """Strip control chars that are illegal in XML, keep newlines."""
+    text = str(value or "")
+    return "".join(ch for ch in text if ch in "\n\t\r" or ord(ch) >= 32).strip()
+
+
 def ytdlp_base():
     args = ["yt-dlp", "--no-warnings"]
     # yt-dlp needs a JS runtime for YouTube; prefer deno (default), fall back to node
@@ -135,7 +141,7 @@ def make_episode(show, vid, tmp):
     return {
         "id": vid,
         "title": info["title"],
-        "description": (info.get("description") or info["title"])[:4000],
+        "description": clean_text(info.get("description") or info["title"]),
         "pub": dt.isoformat(),
         "duration": int(info.get("duration") or 0),
         "bytes": audio.stat().st_size,
@@ -170,7 +176,7 @@ def build_feed(show, eps):
     <link>{escape(e['link'])}</link>
     <guid isPermaLink="false">{escape(e['id'])}</guid>
     <pubDate>{pub}</pubDate>
-    <description>{escape(e['description'])}</description>
+    <description>{escape(clean_text(e['description']))}</description>
     <enclosure url="{escape(e['audio_url'])}" length="{e['bytes']}" type="audio/mp4"/>
     <itunes:duration>{e['duration']}</itunes:duration>
     <itunes:image href="{base}/cover.jpg"/>
@@ -182,7 +188,7 @@ def build_feed(show, eps):
   <title>{escape(show['title'])}</title>
   <link>{escape(show['channel_url'].removesuffix('/videos'))}</link>
   <atom:link href="{base}/feed.xml" rel="self" type="application/rss+xml"/>
-  <description>{escape(show['description'])}</description>
+  <description>{escape(clean_text(show['description']))}</description>
   <language>{escape(show.get('language', 'en'))}</language>
   <itunes:author>{escape(show['author'])}</itunes:author>
   <itunes:explicit>false</itunes:explicit>
@@ -204,7 +210,7 @@ def build_index():
         f"""    <li>
       <img src="feeds/{s['slug']}/cover.jpg" alt="{escape(s['title'])} cover">
       <h2>{escape(s['title'])}</h2>
-      <p>{escape(s['description'])}</p>
+      <p>{escape(clean_text(s['description']))}</p>
       <a href="feeds/{s['slug']}/feed.xml">RSS feed</a>
     </li>"""
         for s in CFG["shows"]
