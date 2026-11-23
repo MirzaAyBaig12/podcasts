@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+  <title>The Star Wars Galaxy</title>
+  <link>https://www.youtube.com/@thestarwarsgalaxy</link>
+  <atom:link href="https://mirzaaybaig12.github.io/podcasts/feeds/star-wars-galaxy/feed.xml" rel="self" type="application/rss+xml"/>
+  <description>Audio from The Star Wars Galaxy YouTube channel, turned into a podcast feed. Unofficial feed.</description>
+  <language>en</language>
+  <itunes:author>The Star Wars Galaxy</itunes:author>
+  <itunes:explicit>false</itunes:explicit>
+  <itunes:image href="https://mirzaaybaig12.github.io/podcasts/feeds/star-wars-galaxy/cover.jpg"/>
+  <itunes:category text="TV &amp; Film"/>
+  <image>
+    <url>https://mirzaaybaig12.github.io/podcasts/feeds/star-wars-galaxy/cover.jpg</url>
+    <title>The Star Wars Galaxy</title>
+    <link>https://www.youtube.com/@thestarwarsgalaxy</link>
+  </image>
+
+</channel>
+</rss>

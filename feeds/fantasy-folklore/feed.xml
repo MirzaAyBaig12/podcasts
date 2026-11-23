@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+  <title>Fantasy Folklore</title>
+  <link>https://www.youtube.com/@FantasyFolklore</link>
+  <atom:link href="https://mirzaaybaig12.github.io/podcasts/feeds/fantasy-folklore/feed.xml" rel="self" type="application/rss+xml"/>
+  <description>Audio from the Fantasy Folklore YouTube channel, turned into a podcast feed. Unofficial feed.</description>
+  <language>en</language>
+  <itunes:author>Fantasy Folklore</itunes:author>
+  <itunes:explicit>false</itunes:explicit>
+  <itunes:image href="https://mirzaaybaig12.github.io/podcasts/feeds/fantasy-folklore/cover.jpg"/>
+  <itunes:category text="TV &amp; Film"/>
+  <image>
+    <url>https://mirzaaybaig12.github.io/podcasts/feeds/fantasy-folklore/cover.jpg</url>
+    <title>Fantasy Folklore</title>
+    <link>https://www.youtube.com/@FantasyFolklore</link>
+  </image>
+
+</channel>
+</rss>

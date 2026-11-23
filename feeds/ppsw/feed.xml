@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+  <title>Pente Patrol Star Wars</title>
+  <link>https://www.youtube.com/@pentepatrolstarwars</link>
+  <atom:link href="https://mirzaaybaig12.github.io/podcasts/feeds/ppsw/feed.xml" rel="self" type="application/rss+xml"/>
+  <description>Audio from the Pente Patrol Star Wars YouTube channel, turned into a podcast feed with the channel owner's permission. Unofficial feed.</description>
+  <language>en</language>
+  <itunes:author>Pente Patrol Star Wars</itunes:author>
+  <itunes:explicit>false</itunes:explicit>
+  <itunes:image href="https://mirzaaybaig12.github.io/podcasts/feeds/ppsw/cover.jpg"/>
+  <itunes:category text="TV &amp; Film"/>
+  <image>
+    <url>https://mirzaaybaig12.github.io/podcasts/feeds/ppsw/cover.jpg</url>
+    <title>Pente Patrol Star Wars</title>
+    <link>https://www.youtube.com/@pentepatrolstarwars</link>
+  </image>
+
+</channel>
+</rss>

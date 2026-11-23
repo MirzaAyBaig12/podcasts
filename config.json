@@ -1,0 +1,37 @@
+{
+  "repo": "MirzaAyBaig12/podcasts",
+  "pages_url": "https://mirzaaybaig12.github.io/podcasts",
+  "max_new_per_run": 20,
+  "feed_episodes": 20,
+  "keep_releases": 100,
+  "art_size": 1400,
+  "shows": [
+    {
+      "slug": "ppsw",
+      "channel_url": "https://www.youtube.com/@pentepatrolstarwars/videos",
+      "title": "Pente Patrol Star Wars",
+      "description": "Audio from the Pente Patrol Star Wars YouTube channel, turned into a podcast feed with the channel owner's permission. Unofficial feed.",
+      "author": "Pente Patrol Star Wars",
+      "category": "TV & Film",
+      "language": "en"
+    },
+    {
+      "slug": "fantasy-folklore",
+      "channel_url": "https://www.youtube.com/@FantasyFolklore/videos",
+      "title": "Fantasy Folklore",
+      "description": "Audio from the Fantasy Folklore YouTube channel, turned into a podcast feed. Unofficial feed.",
+      "author": "Fantasy Folklore",
+      "category": "TV & Film",
+      "language": "en"
+    },
+    {
+      "slug": "star-wars-galaxy",
+      "channel_url": "https://www.youtube.com/@thestarwarsgalaxy/videos",
+      "title": "The Star Wars Galaxy",
+      "description": "Audio from The Star Wars Galaxy YouTube channel, turned into a podcast feed. Unofficial feed.",
+      "author": "The Star Wars Galaxy",
+      "category": "TV & Film",
+      "language": "en"
+    }
+  ]
+}
