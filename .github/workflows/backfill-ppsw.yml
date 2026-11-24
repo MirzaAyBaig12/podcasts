@@ -1,29 +1,23 @@
-name: Backfill all episodes (one-time)
+name: Backfill PPSW (one-time)
 
-# Manual dispatch only — deliberately NOT scheduled. Disable this workflow
-# immediately after its single successful run.
+# Runs only after "Backfill SWG (one-time)" succeeds; triggers Fantasy next.
 on:
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Backfill SWG (one-time)"]
+    types: [completed]
 
 permissions:
   contents: write
 
 concurrency:
-  group: backfill-all-episodes
+  group: backfill-ppsw
   cancel-in-progress: false
 
 jobs:
   backfill:
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        slug:
-          - ppsw
-          - fantasy-folklore
-          - star-wars-galaxy
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,12 +40,12 @@ jobs:
         run: |
           if [ -n "$YT_COOKIES" ]; then printf '%s' "$YT_COOKIES" > cookies.txt; fi
 
-      - name: Backfill every missing episode for ${{ matrix.slug }}
+      - name: Backfill every missing PPSW episode
         env:
           GH_TOKEN: ${{ github.token }}
           MAX_NEW: "0"
           SCAN_N: "10000"
-          SHOW_SLUG: ${{ matrix.slug }}
+          SHOW_SLUG: ppsw
         run: python scripts/update.py
 
       - name: Commit feeds and state
@@ -60,10 +54,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add feeds state seen index.html
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "Backfill all episodes: ${{ matrix.slug }}"
-          for attempt in 1 2 3 4 5; do
-            if git pull --rebase origin main && git push origin main; then exit 0; fi
-            sleep 10
-          done
-          exit 1
+          git diff --cached --quiet || (git commit -m "Backfill all episodes: ppsw" && git push)

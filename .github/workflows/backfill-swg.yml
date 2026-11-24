@@ -1,0 +1,54 @@
+name: Backfill SWG (one-time)
+
+# Manual dispatch only. Run this first; it triggers the PPSW workflow on success.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backfill-swg
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install yt-dlp, ImageMagick, ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick ffmpeg
+          python -m pip install -U "yt-dlp[default]"
+          yt-dlp --version
+
+      - name: Write cookies (optional, only if the YT_COOKIES secret exists)
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then printf '%s' "$YT_COOKIES" > cookies.txt; fi
+
+      - name: Backfill every missing Star Wars Galaxy episode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_NEW: "0"
+          SCAN_N: "10000"
+          SHOW_SLUG: star-wars-galaxy
+        run: python scripts/update.py
+
+      - name: Commit feeds and state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feeds state seen index.html
+          git diff --cached --quiet || (git commit -m "Backfill all episodes: star-wars-galaxy" && git push)
