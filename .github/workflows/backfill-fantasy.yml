@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: backfill-fantasy
@@ -55,3 +56,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add feeds state seen index.html
           git diff --cached --quiet || (git commit -m "Backfill all episodes: fantasy-folklore" && git push)
+
+      - name: Disable this one-time workflow
+        if: success()
+        run: gh workflow disable backfill-fantasy.yml --repo "$GITHUB_REPOSITORY"

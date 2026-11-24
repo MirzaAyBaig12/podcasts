@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: backfill-swg
@@ -52,3 +53,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add feeds state seen index.html
           git diff --cached --quiet || (git commit -m "Backfill all episodes: star-wars-galaxy" && git push)
+
+      - name: Disable this one-time workflow
+        if: success()
+        run: gh workflow disable backfill-swg.yml --repo "$GITHUB_REPOSITORY"
