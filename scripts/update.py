@@ -28,7 +28,8 @@ MAX_NEW = int(os.environ.get("MAX_NEW") or CFG.get("max_new_per_run", 20))
 FEED_N = int(CFG.get("feed_episodes", 20))
 KEEP_N = int(CFG.get("keep_releases", 100))
 ART = int(CFG.get("art_size", 1400))
-SCAN_N = max(FEED_N, KEEP_N, MAX_NEW)
+# Only look at the newest FEED_N videos: anything older is never backfilled.
+SCAN_N = FEED_N
 SKIP_LIVE = ("is_live", "is_upcoming", "post_live")
 
 
