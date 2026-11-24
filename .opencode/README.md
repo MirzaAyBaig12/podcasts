@@ -20,29 +20,32 @@ Root index: `https://mirzaaybaig12.github.io/podcasts/`
 2. PPSW was the template. The owner had approved that one; the other two are marked “unofficial feed”.
 3. Combined all three into this repo. **No audio, releases, or state were ported** — the new repo downloaded everything fresh.
 4. Old repos' update workflows were disabled so they wouldn't run in parallel. Local folders were removed later; GitHub-side deletion was left to the owner (token lacked `delete_repo` scope).
-5. First successful full build produced 20 episodes per show in each feed.
+5. First successful full build produced 20 episodes per show; later runs grew state to 60 each.
+6. Owner changed the workflow: 15-minute cadence, scan only the newest videos, and "new" means not yet in state.
+7. State was backfilled manually from all 258 existing releases; feeds now contain every episode (100 / 85 / 73) with no caps or pruning.
 
 ## Layout
 
 ```
 config.json              shows + limits (single source of truth)
 scripts/update.py        all logic
-.github/workflows/update.yml   hourly cron
-feeds/<slug>/feed.xml    published RSS
+.github/workflows/update.yml   15-minute cron
+feeds/<slug>/feed.xml    published RSS (all episodes, no cap)
 feeds/<slug>/cover.jpg   square channel avatar, also used on every item
-state/<slug>.json        newest 100 episodes per show
-seen/<slug>.json         append-only list of every video ID ever processed
+state/<slug>.json        all episodes per show; also the "have" set for dedupe
+seen/<slug>.json         secondary append-only ledger of processed video IDs
 index.html               generated landing page
 cookies.txt              NEVER committed (gitignored; CI writes from secret)
 ```
 
 ## Settings (in config.json)
 
-- `max_new_per_run`: 20 new videos per show per run
-- `feed_episodes`: 20 newest episodes published in each feed
-- `keep_releases`: 100 episodes kept per show; older releases are deleted
+- `max_new_per_run`: `0` = unlimited new videos within the scan window
+- `feed_episodes`: `0` = publish every episode in state
+- `keep_releases`: `0` = never delete releases
+- `scan_count`: `20` — only the 20 newest channel videos are checked, so old uploads are never backfilled
 - `art_size`: 1400px square cover
-- workflow cron: `0 * * * *` (hourly)
+- workflow cron: `7,22,37,52 * * * *` (every 15 minutes)
 - release tags: `<slug>-yt-<videoid>` (namespaced so IDs can't collide)
 
 ## CI summary
@@ -56,13 +59,9 @@ Every run writes a Markdown table to GitHub's job summary ($GITHUB_STEP_SUMMARY)
 
 ## Never re-downloading episodes
 
-`state/<slug>.json` only holds the newest 100 episodes, so it can't be the dedupe source. `seen/<slug>.json` is an append-only ledger of every video ID ever processed.
+A video counts as "new" only when its ID is **not in `state/<slug>.json`**. That was changed from the original `seen`-ledger check because interrupted runs could leave releases behind without ever reaching state.
 
-At the start of each show, the ledger is unioned with:
-- IDs in current state
-- IDs parsed from existing release tags (`<slug>-yt-<id>`)
-
-That second source covers runs interrupted before the ledger was committed. A video ID in the ledger is skipped before yt-dlp is invoked, so no audio is downloaded twice.
+`seen/<slug>.json` is still maintained as a secondary ledger and is seeded from existing release tags (`<slug>-yt-<id>`), but it is not the dedupe source. The channel scan is bounded by `scan_count` (20), so only recent uploads are ever considered; older videos are never backfilled by CI. The one-time backfill of all existing releases was done manually.
 
 ## Auth / gotchas
 
@@ -75,8 +74,8 @@ That second source covers runs interrupted before the ledger was committed. A vi
 ## Useful commands
 
 ```bash
-# trigger a run
-gh workflow run update.yml --repo MirzaAyBaig12/podcasts --field max_new=20
+# trigger a run (workflow default max_new=20; pass 0 for unlimited within the scan window)
+gh workflow run update.yml --repo MirzaAyBaig12/podcasts
 
 # watch latest run
 gh run list --repo MirzaAyBaig12/podcasts --workflow update.yml --limit 1 \
@@ -103,4 +102,4 @@ gh secret set YT_COOKIES --repo MirzaAyBaig12/podcasts < ~/Downloads/www.youtube
 
 1. Add an object to `shows` in `config.json` with a unique `slug`.
 2. Add `seen/<slug>.json` containing `[]` (script creates state/feed/cover on first run).
-3. Commit and push; the next hourly run builds its cover, feed and releases.
+3. Commit and push; the next 15-minute run builds its cover, feed and releases.

@@ -3,8 +3,9 @@
 
 Each show gets its own feed, cover and state file under feeds/<slug>/ and
 state/<slug>.json. Audio is uploaded to this repo's Releases with a namespaced
-tag (<slug>-yt-<videoid>). The newest FEED_EPISODES go in the feed; releases
-older than KEEP_RELEASES are deleted so storage stays bounded.
+tag (<slug>-yt-<videoid>). By default there are no caps: every episode in state
+goes in the feed and no releases are deleted. Only the newest SCAN_N videos are
+checked per run, so old uploads are never backfilled automatically.
 
 Needs: yt-dlp, ffmpeg, ImageMagick, and gh (GH_TOKEN set in CI).
 """
@@ -24,12 +25,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CFG = json.loads((ROOT / "config.json").read_text())
 REPO = os.environ.get("GITHUB_REPOSITORY") or CFG["repo"]
 BASE = CFG["pages_url"].rstrip("/")
-MAX_NEW = int(os.environ.get("MAX_NEW") or CFG.get("max_new_per_run", 20))
-FEED_N = int(CFG.get("feed_episodes", 20))
-KEEP_N = int(CFG.get("keep_releases", 100))
+# 0 means unlimited in all three cases.
+MAX_NEW = int(os.environ.get("MAX_NEW") or CFG.get("max_new_per_run", 0))
+FEED_N = int(CFG.get("feed_episodes", 0))
+KEEP_N = int(CFG.get("keep_releases", 0))
 ART = int(CFG.get("art_size", 1400))
-# Only look at the newest FEED_N videos: anything older is never backfilled.
-SCAN_N = FEED_N
+SCAN_N = int(CFG.get("scan_count", 1000))
 SKIP_LIVE = ("is_live", "is_upcoming", "post_live")
 
 
@@ -188,9 +189,11 @@ def make_episode(show, vid, tmp):
 
 
 def prune(show, eps):
-    """Keep KEEP_N episodes on disk; delete older releases."""
+    """Keep KEEP_N episodes on disk; 0 means never delete anything."""
     slug = show["slug"]
     eps.sort(key=lambda e: e["pub"], reverse=True)
+    if KEEP_N <= 0:
+        return eps
     keep, drop = eps[:KEEP_N], eps[KEEP_N:]
     for e in drop:
         print(f"[{slug}] pruning {e['id']}")
@@ -201,11 +204,17 @@ def prune(show, eps):
     return keep
 
 
+def feed_episodes(eps):
+    """All episodes in newest-first order; FEED_N=0 means no cap."""
+    ordered = sorted(eps, key=lambda e: e["pub"], reverse=True)
+    return ordered[:FEED_N] if FEED_N > 0 else ordered
+
+
 def build_feed(show, eps):
     slug = show["slug"]
     base = f"{BASE}/feeds/{slug}"
     items = []
-    for e in sorted(eps, key=lambda x: x["pub"], reverse=True)[:FEED_N]:
+    for e in feed_episodes(eps):
         pub = email.utils.format_datetime(datetime.datetime.fromisoformat(e["pub"]))
         items.append(
             f"""  <item>
@@ -340,34 +349,35 @@ def main():
             eps = json.loads(sf.read_text()) if sf.exists() else []
             seen_sf, seen = load_seen(show, eps)
 
+            entries = list_channel(show)
+            # "New" = not in the feed state yet. The seen ledger also counts
+            # releases left behind by interrupted runs, which never reached
+            # the state/feed, so it can't be trusted to mean "in the feed".
+            have = {x["id"] for x in eps}
+            todo = [
+                e for e in entries
+                if e["id"] not in have and e.get("live_status") not in SKIP_LIVE
+            ]
             if MAX_NEW > 0:
-                entries = list_channel(show)
-                # "New" = not in the feed state yet. The seen ledger also counts
-                # releases left behind by interrupted runs, which never reached
-                # the state/feed, so it can't be trusted to mean "in the feed".
-                have = {x["id"] for x in eps}
-                todo = [
-                    e for e in entries
-                    if e["id"] not in have and e.get("live_status") not in SKIP_LIVE
-                ][:MAX_NEW]
-                print(f"{len(entries)} scanned, {len(todo)} new to process")
-                for e in todo:
-                    tmp = pathlib.Path(tempfile.mkdtemp())
-                    try:
-                        ep = make_episode(show, e["id"], tmp)
-                        eps.append(ep)
-                        seen.add(e["id"])
-                        sf.write_text(json.dumps(eps, indent=1))
-                        seen_sf.parent.mkdir(parents=True, exist_ok=True)
-                        seen_sf.write_text(json.dumps(sorted(seen), indent=1))
-                        row["new"].append((e["id"], ep["title"]))
-                        print(f"done {e['id']}")
-                    except Exception as ex:
-                        failed += 1
-                        row["failed"].append((e["id"], str(ex)))
-                        print(f"FAILED {e['id']}: {ex}", file=sys.stderr)
-                    finally:
-                        shutil.rmtree(tmp, ignore_errors=True)
+                todo = todo[:MAX_NEW]
+            print(f"{len(entries)} scanned, {len(todo)} new to process")
+            for e in todo:
+                tmp = pathlib.Path(tempfile.mkdtemp())
+                try:
+                    ep = make_episode(show, e["id"], tmp)
+                    eps.append(ep)
+                    seen.add(e["id"])
+                    sf.write_text(json.dumps(eps, indent=1))
+                    seen_sf.parent.mkdir(parents=True, exist_ok=True)
+                    seen_sf.write_text(json.dumps(sorted(seen), indent=1))
+                    row["new"].append((e["id"], ep["title"]))
+                    print(f"done {e['id']}")
+                except Exception as ex:
+                    failed += 1
+                    row["failed"].append((e["id"], str(ex)))
+                    print(f"FAILED {e['id']}: {ex}", file=sys.stderr)
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
 
             eps = prune(show, eps)
             sf.write_text(json.dumps(eps, indent=1))
@@ -375,7 +385,7 @@ def main():
             seen_sf.write_text(json.dumps(sorted(seen), indent=1))
             feed_dir(slug).mkdir(parents=True, exist_ok=True)
             (feed_dir(slug) / "feed.xml").write_text(build_feed(show, eps))
-            row["feed_count"] = len(eps[:FEED_N])
+            row["feed_count"] = len(feed_episodes(eps))
             row["kept"] = len(eps)
             print(f"feed written with {row['feed_count']} episodes "
                   f"({row['kept']} kept in state)")
