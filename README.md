@@ -14,9 +14,10 @@ Landing page: `https://mirzaaybaig12.github.io/podcasts/`. Each show has its own
 
 The workflow in `.github/workflows/update.yml` runs every 15 minutes (`7,22,37,52 * * * *`) and runs `scripts/update.py`:
 
-- scans only the **20 newest videos** per channel (`scan_count`) so old uploads are never backfilled
-- treats a video as new until its ID appears in that show's `state/<slug>.json`
-- downloads audio for new videos with yt-dlp + ffmpeg
+- scans only the **20 newest videos** per channel (`scan_count`) so old uploads are never backfilled; this is the only source of new episodes
+- treats a video as new only when its ID is absent from `state/<slug>.json` **and** has no existing release
+- skips anything already downloaded — a release check runs before yt-dlp, so existing episodes are never downloaded again
+- downloads audio for genuinely new videos with yt-dlp + ffmpeg
 - uploads one release per episode, tagged `<slug>-yt-<videoid>`
 - writes **every episode in state** to `feeds/<slug>/feed.xml` — no feed cap
 - **never deletes releases** — no auto-clean, no retention limit

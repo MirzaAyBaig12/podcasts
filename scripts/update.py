@@ -144,8 +144,45 @@ def release_exists(tag):
     return r.returncode == 0
 
 
+def episode_from_release(show, vid):
+    """Rebuild a state entry from an existing release, with no download."""
+    tag = f"{show['slug']}-yt-{vid}"
+    r = subprocess.run(
+        ["gh", "release", "view", tag, "--repo", REPO,
+         "--json", "name,body,publishedAt,assets"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return None
+    d = json.loads(r.stdout)
+    asset = next((a for a in d.get("assets", []) if a["name"].endswith(".m4a")), None)
+    if asset is None:
+        return None
+    body = (d.get("body") or "").strip()
+    link = body if body.startswith("http") else f"https://www.youtube.com/watch?v={vid}"
+    title = d.get("name") or vid
+    pub = (d.get("publishedAt") or "").replace("Z", "+00:00")
+    if not pub:
+        pub = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return {
+        "id": vid,
+        "title": title,
+        "description": title,
+        "pub": pub,
+        "duration": 0,
+        "bytes": asset["size"],
+        "audio_url": asset["url"],
+        "link": link,
+    }
+
+
 def make_episode(show, vid, tmp):
     slug = show["slug"]
+    tag = f"{slug}-yt-{vid}"
+    # Never download an episode that already has a release.
+    if release_exists(tag):
+        print(f"[{slug}] {vid} already has a release; skipping download")
+        return None
     link = f"https://www.youtube.com/watch?v={vid}"
     run(
         ytdlp_base()
@@ -160,12 +197,8 @@ def make_episode(show, vid, tmp):
     info = json.loads((tmp / f"{vid}.info.json").read_text())
     audio = tmp / f"{vid}.m4a"
 
-    tag = f"{slug}-yt-{vid}"
-    if release_exists(tag):
-        run(["gh", "release", "upload", tag, str(audio), "--clobber", "--repo", REPO])
-    else:
-        run(["gh", "release", "create", tag, str(audio), "--repo", REPO,
-             "--title", info["title"], "--notes", link])
+    run(["gh", "release", "create", tag, str(audio), "--repo", REPO,
+         "--title", info["title"], "--notes", link])
 
     ts = info.get("release_timestamp") or info.get("timestamp")
     if ts:
@@ -349,10 +382,9 @@ def main():
             eps = json.loads(sf.read_text()) if sf.exists() else []
             seen_sf, seen = load_seen(show, eps)
 
+            # Only the newest SCAN_N videos are scanned. Nothing older can
+            # ever be downloaded, even during a manual unlimited run.
             entries = list_channel(show)
-            # "New" = not in the feed state yet. The seen ledger also counts
-            # releases left behind by interrupted runs, which never reached
-            # the state/feed, so it can't be trusted to mean "in the feed".
             have = {x["id"] for x in eps}
             todo = [
                 e for e in entries
@@ -360,22 +392,35 @@ def main():
             ]
             if MAX_NEW > 0:
                 todo = todo[:MAX_NEW]
-            print(f"{len(entries)} scanned, {len(todo)} new to process")
+            print(f"{len(entries)} scanned, {len(todo)} not yet in state")
             for e in todo:
+                vid = e["id"]
+                if vid in seen:
+                    # Already has a release / was processed before. Restore the
+                    # state entry from release metadata, but NEVER re-download.
+                    ep = episode_from_release(show, vid)
+                    if ep:
+                        eps.append(ep)
+                        sf.write_text(json.dumps(eps, indent=1))
+                        row["new"].append((vid, f"{ep['title']} (restored, no download)"))
+                        print(f"restored {vid} from release (no download)")
+                    continue
                 tmp = pathlib.Path(tempfile.mkdtemp())
                 try:
-                    ep = make_episode(show, e["id"], tmp)
+                    ep = make_episode(show, vid, tmp)
+                    if ep is None:
+                        continue
                     eps.append(ep)
-                    seen.add(e["id"])
+                    seen.add(vid)
                     sf.write_text(json.dumps(eps, indent=1))
                     seen_sf.parent.mkdir(parents=True, exist_ok=True)
                     seen_sf.write_text(json.dumps(sorted(seen), indent=1))
-                    row["new"].append((e["id"], ep["title"]))
-                    print(f"done {e['id']}")
+                    row["new"].append((vid, ep["title"]))
+                    print(f"done {vid}")
                 except Exception as ex:
                     failed += 1
-                    row["failed"].append((e["id"], str(ex)))
-                    print(f"FAILED {e['id']}: {ex}", file=sys.stderr)
+                    row["failed"].append((vid, str(ex)))
+                    print(f"FAILED {vid}: {ex}", file=sys.stderr)
                 finally:
                     shutil.rmtree(tmp, ignore_errors=True)
 

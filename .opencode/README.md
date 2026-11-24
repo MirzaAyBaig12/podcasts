@@ -59,9 +59,9 @@ Every run writes a Markdown table to GitHub's job summary ($GITHUB_STEP_SUMMARY)
 
 ## Never re-downloading episodes
 
-A video counts as "new" only when its ID is **not in `state/<slug>.json`**. That was changed from the original `seen`-ledger check because interrupted runs could leave releases behind without ever reaching state.
+A video is downloaded only when its ID is **not in `state/<slug>.json`** and **has no existing release tag**. `make_episode()` checks `release_exists()` *before* invoking yt-dlp, so a re-download is impossible even if state is missing an entry. If a release exists but its state entry vanished (interrupted run), the entry is rebuilt from release metadata with no download.
 
-`seen/<slug>.json` is still maintained as a secondary ledger and is seeded from existing release tags (`<slug>-yt-<id>`), but it is not the dedupe source. The channel scan is bounded by `scan_count` (20), so only recent uploads are ever considered; older videos are never backfilled by CI. The one-time backfill of all existing releases was done manually.
+`seen/<slug>.json` is maintained as a secondary ledger, seeded from existing release tags (`<slug>-yt-<id>`), and is used to detect that "already processed but missing from state" case. The channel scan is bounded by `scan_count` (20) and YouTube's `/videos` order, so only the newest uploads are ever considered; older videos are never backfilled by CI. The one-time backfill of all existing releases was done manually.
 
 ## Auth / gotchas
 
