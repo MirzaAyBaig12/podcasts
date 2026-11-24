@@ -30,7 +30,9 @@ MAX_NEW = int(os.environ.get("MAX_NEW") or CFG.get("max_new_per_run", 0))
 FEED_N = int(CFG.get("feed_episodes", 0))
 KEEP_N = int(CFG.get("keep_releases", 0))
 ART = int(CFG.get("art_size", 1400))
-SCAN_N = int(CFG.get("scan_count", 1000))
+SCAN_N = int(os.environ.get("SCAN_N") or CFG.get("scan_count", 1000))
+SHOW_SLUG = os.environ.get("SHOW_SLUG", "").strip()
+SHOWS = [s for s in CFG["shows"] if not SHOW_SLUG or s["slug"] == SHOW_SLUG]
 SKIP_LIVE = ("is_live", "is_upcoming", "post_live")
 
 
@@ -88,7 +90,7 @@ def load_seen(show, eps):
 
     prefix = f"{show['slug']}-yt-"
     r = subprocess.run(
-        ["gh", "release", "list", "--repo", REPO, "--limit", "1000", "--json", "tagName"],
+        ["gh", "release", "list", "--repo", REPO, "--limit", "10000", "--json", "tagName"],
         capture_output=True, text=True,
     )
     if r.returncode == 0:
@@ -363,7 +365,7 @@ def write_summary(rows):
 def main():
     failed = 0
     summary = []
-    for show in CFG["shows"]:
+    for show in SHOWS:
         slug = show["slug"]
         row = {
             "slug": slug,
