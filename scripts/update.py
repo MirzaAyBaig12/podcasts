@@ -342,9 +342,13 @@ def main():
 
             if MAX_NEW > 0:
                 entries = list_channel(show)
+                # "New" = not in the feed state yet. The seen ledger also counts
+                # releases left behind by interrupted runs, which never reached
+                # the state/feed, so it can't be trusted to mean "in the feed".
+                have = {x["id"] for x in eps}
                 todo = [
                     e for e in entries
-                    if e["id"] not in seen and e.get("live_status") not in SKIP_LIVE
+                    if e["id"] not in have and e.get("live_status") not in SKIP_LIVE
                 ][:MAX_NEW]
                 print(f"{len(entries)} scanned, {len(todo)} new to process")
                 for e in todo:
