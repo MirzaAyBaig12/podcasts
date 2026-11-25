@@ -15,6 +15,7 @@ import email.utils
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -529,32 +530,37 @@ def main():
             seen_sf, seen = load_seen(show, eps)
 
             if REPAIR_DATES:
-                # Flat playlists omit upload dates, so fetch per-video metadata
-                # in parallel. This never downloads audio.
+                # Read the uploadDate JSON-LD field from each watch page. This
+                # is lighter and far more reliable than yt-dlp metadata calls,
+                # and it never downloads audio.
                 by_id = {e["id"]: e for e in eps}
 
                 def fetch_date(ep):
                     vid = ep["id"]
+                    url = f"https://www.youtube.com/watch?v={vid}"
                     try:
-                        meta = run_retry(
-                            ytdlp_base() + ["-J", "--skip-download",
-                                            f"https://www.youtube.com/watch?v={vid}"],
-                            attempts=2,
-                            delay=3,
-                            capture_output=True,
+                        req = urllib.request.Request(
+                            url,
+                            headers={"User-Agent": "Mozilla/5.0 (compatible; podcast-feed-repair)"},
                         )
-                        m = json.loads(meta.stdout)
-                        return vid, entry_pub(m), int(m.get("duration") or 0), \
-                            clean_text(m.get("description") or ep.get("description") or ep["title"])
+                        with urllib.request.urlopen(req, timeout=20) as resp:
+                            html = resp.read().decode("utf-8", "ignore")
+                        m = re.search(r'"uploadDate"\s*:\s*"([^"]+)"', html)
+                        if not m:
+                            raise ValueError("uploadDate not found in watch page")
+                        pub = datetime.datetime.fromisoformat(
+                            m.group(1)
+                        ).astimezone(datetime.timezone.utc).isoformat()
+                        return vid, pub
                     except Exception as ex:
-                        print(f"[{slug}] {vid} metadata failed: {ex}", file=sys.stderr)
-                        return vid, None, 0, ""
+                        print(f"[{slug}] {vid} date lookup failed: {ex}", file=sys.stderr)
+                        return vid, None
 
                 fixed, failed = 0, 0
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=REPAIR_WORKERS
                 ) as pool:
-                    for vid, pub, duration, description in pool.map(fetch_date, eps):
+                    for vid, pub in pool.map(fetch_date, eps):
                         ep = by_id[vid]
                         if not pub:
                             failed += 1
@@ -562,10 +568,6 @@ def main():
                         if ep.get("pub") != pub:
                             ep["pub"] = pub
                             fixed += 1
-                        if duration:
-                            ep["duration"] = duration
-                        if description:
-                            ep["description"] = description
                 eps.sort(key=lambda e: e["pub"], reverse=True)
                 sf.write_text(json.dumps(eps, indent=1))
                 feed_dir(slug).mkdir(parents=True, exist_ok=True)
