@@ -2,6 +2,7 @@ name: Backfill Fantasy Folklore (one-time)
 
 # Runs only after "Backfill PPSW (one-time)" succeeds. Last in the chain.
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["Backfill PPSW (one-time)"]
     types: [completed]
@@ -16,7 +17,7 @@ concurrency:
 
 jobs:
   backfill:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
