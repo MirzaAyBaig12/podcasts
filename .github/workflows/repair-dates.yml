@@ -41,10 +41,11 @@ jobs:
         run: |
           if [ -n "$YT_COOKIES" ]; then printf '%s' "$YT_COOKIES" > cookies.txt; fi
 
-      - name: Repair dates from YouTube playlist metadata (no downloads)
+      - name: Repair dates from YouTube metadata (no downloads)
         env:
           GH_TOKEN: ${{ github.token }}
           REPAIR_DATES: "1"
+          REPAIR_WORKERS: "8"
           SHOW_SLUG: ${{ inputs.show }}
           SCAN_N: "10000"
         run: python scripts/update.py

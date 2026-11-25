@@ -37,6 +37,7 @@ SHOW_SLUG = os.environ.get("SHOW_SLUG", "").strip()
 if SHOW_SLUG.lower() == "all":
     SHOW_SLUG = ""
 REPAIR_DATES = os.environ.get("REPAIR_DATES", "").lower() in ("1", "true", "yes")
+REPAIR_WORKERS = max(1, int(os.environ.get("REPAIR_WORKERS", "8")))
 SHOWS = [s for s in CFG["shows"] if not SHOW_SLUG or s["slug"] == SHOW_SLUG]
 ALLOW_FAILURES = os.environ.get("ALLOW_FAILURES", "").lower() in ("1", "true", "yes")
 MAX_WORKERS = max(1, int(os.environ.get("MAX_WORKERS", "4")))
@@ -527,18 +528,44 @@ def main():
             eps = json.loads(sf.read_text()) if sf.exists() else []
             seen_sf, seen = load_seen(show, eps)
 
-            # Only the newest SCAN_N videos are scanned. Nothing older can
-            # ever be downloaded, even during a manual unlimited run.
-            entries = list_channel(show)
-
             if REPAIR_DATES:
-                by_id = {e["id"]: e for e in entries}
-                fixed = 0
-                for ep in eps:
-                    pub = entry_pub(by_id.get(ep["id"], {}))
-                    if pub and ep.get("pub") != pub:
-                        ep["pub"] = pub
-                        fixed += 1
+                # Flat playlists omit upload dates, so fetch per-video metadata
+                # in parallel. This never downloads audio.
+                by_id = {e["id"]: e for e in eps}
+
+                def fetch_date(ep):
+                    vid = ep["id"]
+                    try:
+                        meta = run_retry(
+                            ytdlp_base() + ["-J", "--skip-download",
+                                            f"https://www.youtube.com/watch?v={vid}"],
+                            attempts=2,
+                            delay=3,
+                            capture_output=True,
+                        )
+                        m = json.loads(meta.stdout)
+                        return vid, entry_pub(m), int(m.get("duration") or 0), \
+                            clean_text(m.get("description") or ep.get("description") or ep["title"])
+                    except Exception as ex:
+                        print(f"[{slug}] {vid} metadata failed: {ex}", file=sys.stderr)
+                        return vid, None, 0, ""
+
+                fixed, failed = 0, 0
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=REPAIR_WORKERS
+                ) as pool:
+                    for vid, pub, duration, description in pool.map(fetch_date, eps):
+                        ep = by_id[vid]
+                        if not pub:
+                            failed += 1
+                            continue
+                        if ep.get("pub") != pub:
+                            ep["pub"] = pub
+                            fixed += 1
+                        if duration:
+                            ep["duration"] = duration
+                        if description:
+                            ep["description"] = description
                 eps.sort(key=lambda e: e["pub"], reverse=True)
                 sf.write_text(json.dumps(eps, indent=1))
                 feed_dir(slug).mkdir(parents=True, exist_ok=True)
@@ -546,8 +573,12 @@ def main():
                 row["feed_count"] = len(feed_episodes(eps))
                 row["kept"] = len(eps)
                 print(f"repaired {fixed} dates for {slug} "
-                      f"({row['feed_count']} in feed)")
+                      f"({failed} metadata failures, {row['feed_count']} in feed)")
                 continue
+
+            # Only the newest SCAN_N videos are scanned. Nothing older can
+            # ever be downloaded, even during a manual unlimited run.
+            entries = list_channel(show)
 
             have = {x["id"] for x in eps}
             todo = [
