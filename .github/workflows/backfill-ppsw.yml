@@ -2,6 +2,7 @@ name: Backfill PPSW (one-time)
 
 # Runs only after "Backfill SWG (one-time)" succeeds; triggers Fantasy next.
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["Backfill SWG (one-time)"]
     types: [completed]
@@ -16,7 +17,7 @@ concurrency:
 
 jobs:
   backfill:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
