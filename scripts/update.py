@@ -75,7 +75,7 @@ def clean_text(value):
 
 
 def entry_pub(entry):
-    """Real upload date from a flat-playlist entry. Never the release timestamp."""
+    """Real upload date from yt-dlp metadata. Never the release timestamp."""
     ts = entry.get("release_timestamp") or entry.get("timestamp")
     if ts:
         return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
@@ -212,9 +212,9 @@ def episode_from_release(show, vid, entry=None):
     duration = int(entry.get("duration") or 0)
     description = clean_text(entry.get("description") or title) or title
 
-    # The flat playlist already carries the real upload date. Only fall back to
-    # a per-video metadata lookup if the playlist omitted it. Never fall back to
-    # the GitHub release timestamp: that is just when CI uploaded the audio.
+    # Flat playlist entries often omit upload dates, so fall back to a per-video
+    # metadata lookup. Never fall back to the GitHub release timestamp: that is
+    # only when CI uploaded the audio, not when the video was published.
     if not pub:
         try:
             meta = run_retry(
