@@ -46,6 +46,22 @@ CHECKPOINT_EVERY = max(1, int(os.environ.get("CHECKPOINT_EVERY", "50")))
 DOWNLOAD_RETRIES = max(1, int(os.environ.get("DOWNLOAD_RETRIES", "3")))
 DOWNLOAD_DELAY = max(1, int(os.environ.get("DOWNLOAD_DELAY", "5")))
 SKIP_LIVE = ("is_live", "is_upcoming", "post_live")
+# Channel-members-only videos cannot be downloaded with our cookies. yt-dlp
+# reports them via `availability` in playlist metadata; the error hints are a
+# fallback for versions that omit that field.
+MEMBER_ONLY_AVAIL = ("subscriber_only", "members_only", "premium")
+MEMBER_ONLY_ERR = (
+    "members-only", "members only", "subscriber-only", "subscriber only",
+    "join this channel", "exclusive content",
+)
+
+
+class MemberOnlyError(Exception):
+    """Raised when a video is gated behind channel membership."""
+
+
+def is_member_only(entry):
+    return (entry.get("availability") or "").lower() in MEMBER_ONLY_AVAIL
 
 
 def run(cmd, **kw):
@@ -66,7 +82,9 @@ def run_retry(cmd, attempts=3, delay=5, **kw):
                 file=sys.stderr,
             )
             time.sleep(delay * (i + 1))
-    raise subprocess.CalledProcessError(last.returncode, cmd)
+    raise subprocess.CalledProcessError(
+        last.returncode, cmd, output=last.stdout, stderr=last.stderr
+    )
 
 
 def clean_text(value):
@@ -271,9 +289,13 @@ def make_episode(show, vid, tmp):
                     link,
                 ],
                 attempts=1,
+                capture_output=True,
             )
             break
         except subprocess.CalledProcessError as ex:
+            text = f"{ex.stdout or ''} {ex.stderr or ''}".lower()
+            if any(h in text for h in MEMBER_ONLY_ERR):
+                raise MemberOnlyError(vid) from ex
             if attempt >= DOWNLOAD_RETRIES:
                 raise
             print(
@@ -452,9 +474,13 @@ def write_summary(rows):
 def download_one(show, entry):
     """Worker-safe download of a single episode. Returns (vid, episode, error)."""
     vid = entry["id"]
+    if is_member_only(entry):
+        return vid, None, "member-only"
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="podcasts-"))
     try:
         return vid, make_episode(show, vid, tmp), None
+    except MemberOnlyError:
+        return vid, None, "member-only"
     except Exception as ex:  # reported by the main thread; never kills a worker
         return vid, None, str(ex)
     finally:
@@ -608,9 +634,14 @@ def main():
             entries = list_channel(show)
 
             have = {x["id"] for x in eps}
+            # Members-only videos cannot be fetched with our cookies; skip them
+            # before any download is attempted and remember them as processed.
+            seen.update(e["id"] for e in entries if is_member_only(e))
             todo = [
                 e for e in entries
-                if e["id"] not in have and e.get("live_status") not in SKIP_LIVE
+                if e["id"] not in have
+                and e.get("live_status") not in SKIP_LIVE
+                and not is_member_only(e)
             ]
             if MAX_NEW > 0:
                 todo = todo[:MAX_NEW]
@@ -643,6 +674,9 @@ def main():
                         if ep is None and err is None:
                             seen.add(vid)
                             print(f"[{slug}] {vid} skipped (release exists)")
+                        elif err == "member-only":
+                            seen.add(vid)
+                            print(f"[{slug}] {vid} skipped (members-only)")
                         elif ep is None:
                             failed += 1
                             row["failed"].append((vid, err or "download failed"))
