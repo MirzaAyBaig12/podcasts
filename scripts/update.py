@@ -538,6 +538,7 @@ def main():
                 def fetch_date(ep):
                     vid = ep["id"]
                     url = f"https://www.youtube.com/watch?v={vid}"
+                    page_error = ""
                     try:
                         req = urllib.request.Request(
                             url,
@@ -553,7 +554,28 @@ def main():
                         ).astimezone(datetime.timezone.utc).isoformat()
                         return vid, pub
                     except Exception as ex:
-                        print(f"[{slug}] {vid} date lookup failed: {ex}", file=sys.stderr)
+                        page_error = str(ex)
+
+                    # CI IPs are sometimes served a stripped watch page. Fall
+                    # back to yt-dlp metadata, which worked for most videos.
+                    try:
+                        meta = run_retry(
+                            ytdlp_base() + ["-J", "--skip-download", url],
+                            attempts=3,
+                            delay=5,
+                            capture_output=True,
+                        )
+                        m = json.loads(meta.stdout)
+                        pub = entry_pub(m)
+                        if pub:
+                            return vid, pub
+                        raise ValueError("no upload date in yt-dlp metadata")
+                    except Exception as ex:
+                        print(
+                            f"[{slug}] {vid} date lookup failed "
+                            f"(page: {page_error}; yt-dlp: {ex})",
+                            file=sys.stderr,
+                        )
                         return vid, None
 
                 fixed, failed = 0, 0
