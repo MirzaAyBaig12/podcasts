@@ -508,7 +508,7 @@ def commit_checkpoint(slug):
         return
     subprocess.run(["git", "commit", "-m", f"Checkpoint backfill: {slug}"],
                    cwd=ROOT, check=True)
-    for attempt in range(1, 11):
+    for attempt in range(1, 21):
         subprocess.run(["git", "rebase", "--abort"], cwd=ROOT,
                        check=False, capture_output=True, text=True)
         pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"],
