@@ -91,7 +91,8 @@ def entry_pub(entry):
 def ytdlp_base():
     # An explicit socket timeout prevents one hung YouTube request from
     # stalling an entire backfill run until the workflow timeout.
-    args = ["yt-dlp", "--no-warnings", "--socket-timeout", "20"]
+    args = ["yt-dlp", "--no-warnings", "--socket-timeout", "20",
+            "--sleep-interval", "1"]
     # yt-dlp needs a JS runtime for YouTube; prefer deno (default), fall back to node
     if shutil.which("node") and not shutil.which("deno"):
         args += ["--js-runtimes", "node"]
