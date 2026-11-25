@@ -47,6 +47,8 @@ jobs:
           ALLOW_FAILURES: "1"
           MAX_NEW: "0"
           SCAN_N: "10000"
+          MAX_WORKERS: "4"
+          CHECKPOINT_EVERY: "50"
           SHOW_SLUG: ppsw
         run: python scripts/update.py
 

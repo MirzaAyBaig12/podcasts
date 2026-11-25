@@ -9,6 +9,7 @@ checked per run, so old uploads are never backfilled automatically.
 
 Needs: yt-dlp, ffmpeg, ImageMagick, and gh (GH_TOKEN set in CI).
 """
+import concurrent.futures
 import datetime
 import email.utils
 import json
@@ -18,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from xml.sax.saxutils import escape
 
@@ -34,11 +36,32 @@ SCAN_N = int(os.environ.get("SCAN_N") or CFG.get("scan_count", 1000))
 SHOW_SLUG = os.environ.get("SHOW_SLUG", "").strip()
 SHOWS = [s for s in CFG["shows"] if not SHOW_SLUG or s["slug"] == SHOW_SLUG]
 ALLOW_FAILURES = os.environ.get("ALLOW_FAILURES", "").lower() in ("1", "true", "yes")
+MAX_WORKERS = max(1, int(os.environ.get("MAX_WORKERS", "4")))
+CHECKPOINT_EVERY = max(1, int(os.environ.get("CHECKPOINT_EVERY", "50")))
+DOWNLOAD_RETRIES = max(1, int(os.environ.get("DOWNLOAD_RETRIES", "3")))
+DOWNLOAD_DELAY = max(1, int(os.environ.get("DOWNLOAD_DELAY", "5")))
 SKIP_LIVE = ("is_live", "is_upcoming", "post_live")
 
 
 def run(cmd, **kw):
     return subprocess.run(cmd, check=True, text=True, **kw)
+
+
+def run_retry(cmd, attempts=3, delay=5, **kw):
+    """Run a command, retrying transient failures without hiding output."""
+    kw.setdefault("text", True)
+    last = None
+    for i in range(attempts):
+        last = subprocess.run(cmd, **kw)
+        if last.returncode == 0:
+            return last
+        if i < attempts - 1:
+            print(
+                f"retry {i + 1}/{attempts - 1} for: {' '.join(map(str, cmd))}",
+                file=sys.stderr,
+            )
+            time.sleep(delay * (i + 1))
+    raise subprocess.CalledProcessError(last.returncode, cmd)
 
 
 def clean_text(value):
@@ -48,7 +71,9 @@ def clean_text(value):
 
 
 def ytdlp_base():
-    args = ["yt-dlp", "--no-warnings"]
+    # An explicit socket timeout prevents one hung YouTube request from
+    # stalling an entire backfill run until the workflow timeout.
+    args = ["yt-dlp", "--no-warnings", "--socket-timeout", "20"]
     # yt-dlp needs a JS runtime for YouTube; prefer deno (default), fall back to node
     if shutil.which("node") and not shutil.which("deno"):
         args += ["--js-runtimes", "node"]
@@ -132,9 +157,11 @@ def ensure_cover(show):
 
 
 def list_channel(show):
-    out = run(
+    out = run_retry(
         ytdlp_base()
         + ["-J", "--flat-playlist", "--playlist-end", str(SCAN_N), show["channel_url"]],
+        attempts=3,
+        delay=5,
         capture_output=True,
     ).stdout
     return [e for e in json.loads(out).get("entries", []) if e and e.get("id")]
@@ -169,11 +196,16 @@ def episode_from_release(show, vid):
 
     # Real upload date/description come from YouTube metadata, never from the
     # release timestamp (which is just the time CI uploaded the audio).
-    meta = subprocess.run(
-        ytdlp_base() + ["-J", "--skip-download", link],
-        capture_output=True, text=True,
-    )
-    if meta.returncode == 0:
+    try:
+        meta = run_retry(
+            ytdlp_base() + ["-J", "--skip-download", link],
+            attempts=2,
+            delay=3,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        meta = None
+    if meta is not None:
         try:
             m = json.loads(meta.stdout)
             ts = m.get("release_timestamp") or m.get("timestamp")
@@ -210,16 +242,33 @@ def make_episode(show, vid, tmp):
         print(f"[{slug}] {vid} already has a release; skipping download")
         return None
     link = f"https://www.youtube.com/watch?v={vid}"
-    run(
-        ytdlp_base()
-        + [
-            "-f", "bestaudio[ext=m4a]/bestaudio/best",
-            "-x", "--audio-format", "m4a",
-            "--write-info-json",
-            "-o", str(tmp / "%(id)s.%(ext)s"),
-            link,
-        ]
-    )
+    for attempt in range(1, DOWNLOAD_RETRIES + 1):
+        if release_exists(tag):
+            print(f"[{slug}] {vid} already has a release; skipping download")
+            return None
+        try:
+            run_retry(
+                ytdlp_base()
+                + [
+                    "-f", "bestaudio[ext=m4a]/bestaudio/best",
+                    "-x", "--audio-format", "m4a",
+                    "--write-info-json",
+                    "-o", str(tmp / "%(id)s.%(ext)s"),
+                    link,
+                ],
+                attempts=1,
+            )
+            break
+        except subprocess.CalledProcessError as ex:
+            if attempt >= DOWNLOAD_RETRIES:
+                raise
+            print(
+                f"[{slug}] {vid} download failed (attempt {attempt}), retrying",
+                file=sys.stderr,
+            )
+            for partial in tmp.glob(f"{vid}.*"):
+                partial.unlink(missing_ok=True)
+            time.sleep(DOWNLOAD_DELAY * attempt)
     info = json.loads((tmp / f"{vid}.info.json").read_text())
     audio = tmp / f"{vid}.m4a"
 
@@ -386,6 +435,65 @@ def write_summary(rows):
         fh.write("\n".join(lines) + "\n")
 
 
+def download_one(show, entry):
+    """Worker-safe download of a single episode. Returns (vid, episode, error)."""
+    vid = entry["id"]
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="podcasts-"))
+    try:
+        return vid, make_episode(show, vid, tmp), None
+    except Exception as ex:  # reported by the main thread; never kills a worker
+        return vid, None, str(ex)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def commit_checkpoint(slug):
+    """Push partial state so a later failure cannot lose hours of work."""
+    # The workflow's final commit step configures this later, so set it here too.
+    subprocess.run(["git", "config", "user.name", "github-actions[bot]"],
+                   cwd=ROOT, check=False, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "config", "user.email",
+         "41898282+github-actions[bot]@users.noreply.github.com"],
+        cwd=ROOT, check=False, capture_output=True, text=True,
+    )
+    files = [
+        f"state/{slug}.json",
+        f"seen/{slug}.json",
+        f"feeds/{slug}/feed.xml",
+    ]
+    subprocess.run(["git", "add", *files], cwd=ROOT, check=False,
+                   capture_output=True, text=True)
+    if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT).returncode == 0:
+        return
+    subprocess.run(["git", "commit", "-m", f"Checkpoint backfill: {slug}"],
+                   cwd=ROOT, check=True)
+    for attempt in range(1, 11):
+        pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"],
+                              cwd=ROOT, capture_output=True, text=True)
+        push = subprocess.run(["git", "push", "origin", "main"],
+                              cwd=ROOT, capture_output=True, text=True)
+        if pull.returncode == 0 and push.returncode == 0:
+            print(f"checkpoint pushed for {slug}")
+            return
+        print(f"checkpoint push retry {attempt}: "
+              f"{pull.stderr.strip()} {push.stderr.strip()}", file=sys.stderr)
+        time.sleep(15)
+    raise RuntimeError(f"could not push checkpoint for {slug}")
+
+
+def save_progress(show, eps, seen, sf, seen_sf, checkpoint=True):
+    """Persist state, ledger and feed; optionally push a checkpoint commit."""
+    slug = show["slug"]
+    sf.write_text(json.dumps(eps, indent=1))
+    seen_sf.parent.mkdir(parents=True, exist_ok=True)
+    seen_sf.write_text(json.dumps(sorted(seen), indent=1))
+    feed_dir(slug).mkdir(parents=True, exist_ok=True)
+    (feed_dir(slug) / "feed.xml").write_text(build_feed(show, eps))
+    if checkpoint:
+        commit_checkpoint(slug)
+
+
 def main():
     failed = 0
     summary = []
@@ -419,36 +527,49 @@ def main():
             if MAX_NEW > 0:
                 todo = todo[:MAX_NEW]
             print(f"{len(entries)} scanned, {len(todo)} not yet in state")
-            for e in todo:
+
+            # Existing releases are restored from metadata only (no download).
+            restore = [e for e in todo if e["id"] in seen]
+            downloads = [e for e in todo if e["id"] not in seen]
+            for e in restore:
                 vid = e["id"]
-                if vid in seen:
-                    # Already has a release / was processed before. Restore the
-                    # state entry from release metadata, but NEVER re-download.
-                    ep = episode_from_release(show, vid)
-                    if ep:
-                        eps.append(ep)
-                        sf.write_text(json.dumps(eps, indent=1))
-                        row["new"].append((vid, f"{ep['title']} (restored, no download)"))
-                        print(f"restored {vid} from release (no download)")
-                    continue
-                tmp = pathlib.Path(tempfile.mkdtemp())
-                try:
-                    ep = make_episode(show, vid, tmp)
-                    if ep is None:
-                        continue
+                ep = episode_from_release(show, vid)
+                if ep:
                     eps.append(ep)
-                    seen.add(vid)
-                    sf.write_text(json.dumps(eps, indent=1))
-                    seen_sf.parent.mkdir(parents=True, exist_ok=True)
-                    seen_sf.write_text(json.dumps(sorted(seen), indent=1))
-                    row["new"].append((vid, ep["title"]))
-                    print(f"done {vid}")
-                except Exception as ex:
-                    failed += 1
-                    row["failed"].append((vid, str(ex)))
-                    print(f"FAILED {vid}: {ex}", file=sys.stderr)
-                finally:
-                    shutil.rmtree(tmp, ignore_errors=True)
+                    row["new"].append((vid, f"{ep['title']} (restored, no download)"))
+                    print(f"restored {vid} from release (no download)")
+            if restore:
+                save_progress(show, eps, seen, sf, seen_sf)
+
+            # Actual downloads run in a bounded pool. Results are applied on the
+            # main thread, so state writes stay race-free.
+            if downloads:
+                print(f"downloading {len(downloads)} episodes with {MAX_WORKERS} workers")
+                since_checkpoint = 0
+                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+                    futures = {
+                        pool.submit(download_one, show, e): e["id"] for e in downloads
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        vid, ep, err = future.result()
+                        if ep is None and err is None:
+                            seen.add(vid)
+                            print(f"[{slug}] {vid} skipped (release exists)")
+                        elif ep is None:
+                            failed += 1
+                            row["failed"].append((vid, err or "download failed"))
+                            print(f"FAILED {vid}: {err}", file=sys.stderr)
+                        else:
+                            eps.append(ep)
+                            seen.add(vid)
+                            row["new"].append((vid, ep["title"]))
+                            print(f"done {vid}")
+                        since_checkpoint += 1
+                        if since_checkpoint >= CHECKPOINT_EVERY:
+                            save_progress(show, eps, seen, sf, seen_sf)
+                            since_checkpoint = 0
+                if since_checkpoint:
+                    save_progress(show, eps, seen, sf, seen_sf)
 
             eps = prune(show, eps)
             sf.write_text(json.dumps(eps, indent=1))
