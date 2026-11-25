@@ -65,4 +65,6 @@ jobs:
 
       - name: Disable this one-time workflow
         if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: gh workflow disable backfill-swg.yml --repo "$GITHUB_REPOSITORY"
