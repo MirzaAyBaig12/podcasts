@@ -34,6 +34,9 @@ KEEP_N = int(CFG.get("keep_releases", 0))
 ART = int(CFG.get("art_size", 1400))
 SCAN_N = int(os.environ.get("SCAN_N") or CFG.get("scan_count", 1000))
 SHOW_SLUG = os.environ.get("SHOW_SLUG", "").strip()
+if SHOW_SLUG.lower() == "all":
+    SHOW_SLUG = ""
+REPAIR_DATES = os.environ.get("REPAIR_DATES", "").lower() in ("1", "true", "yes")
 SHOWS = [s for s in CFG["shows"] if not SHOW_SLUG or s["slug"] == SHOW_SLUG]
 ALLOW_FAILURES = os.environ.get("ALLOW_FAILURES", "").lower() in ("1", "true", "yes")
 MAX_WORKERS = max(1, int(os.environ.get("MAX_WORKERS", "4")))
@@ -68,6 +71,19 @@ def clean_text(value):
     """Strip control chars that are illegal in XML, keep newlines."""
     text = str(value or "")
     return "".join(ch for ch in text if ch in "\n\t\r" or ord(ch) >= 32).strip()
+
+
+def entry_pub(entry):
+    """Real upload date from a flat-playlist entry. Never the release timestamp."""
+    ts = entry.get("release_timestamp") or entry.get("timestamp")
+    if ts:
+        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
+    upload = entry.get("upload_date")
+    if upload:
+        return datetime.datetime.strptime(
+            str(upload), "%Y%m%d"
+        ).replace(hour=12, tzinfo=datetime.timezone.utc).isoformat()
+    return None
 
 
 def ytdlp_base():
@@ -174,12 +190,12 @@ def release_exists(tag):
     return r.returncode == 0
 
 
-def episode_from_release(show, vid):
-    """Rebuild state from an existing release using metadata only (no audio download)."""
+def episode_from_release(show, vid, entry=None):
+    """Rebuild state from an existing release using real YouTube metadata."""
     tag = f"{show['slug']}-yt-{vid}"
     r = subprocess.run(
         ["gh", "release", "view", tag, "--repo", REPO,
-         "--json", "name,body,publishedAt,assets"],
+         "--json", "name,assets"],
         capture_output=True, text=True,
     )
     if r.returncode != 0:
@@ -189,38 +205,33 @@ def episode_from_release(show, vid):
     if asset is None:
         return None
     link = f"https://www.youtube.com/watch?v={vid}"
-    title = d.get("name") or vid
-    pub = (d.get("publishedAt") or "").replace("Z", "+00:00")
-    duration = 0
-    description = title
+    title = d.get("name") or (entry or {}).get("title") or vid
+    entry = entry or {}
+    pub = entry_pub(entry)
+    duration = int(entry.get("duration") or 0)
+    description = clean_text(entry.get("description") or title) or title
 
-    # Real upload date/description come from YouTube metadata, never from the
-    # release timestamp (which is just the time CI uploaded the audio).
-    try:
-        meta = run_retry(
-            ytdlp_base() + ["-J", "--skip-download", link],
-            attempts=2,
-            delay=3,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        meta = None
-    if meta is not None:
+    # The flat playlist already carries the real upload date. Only fall back to
+    # a per-video metadata lookup if the playlist omitted it. Never fall back to
+    # the GitHub release timestamp: that is just when CI uploaded the audio.
+    if not pub:
         try:
+            meta = run_retry(
+                ytdlp_base() + ["-J", "--skip-download", link],
+                attempts=2,
+                delay=3,
+                capture_output=True,
+            )
             m = json.loads(meta.stdout)
-            ts = m.get("release_timestamp") or m.get("timestamp")
-            if ts:
-                pub = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
-            elif m.get("upload_date"):
-                pub = datetime.datetime.strptime(
-                    str(m["upload_date"]), "%Y%m%d"
-                ).replace(hour=12, tzinfo=datetime.timezone.utc).isoformat()
-            duration = int(m.get("duration") or 0)
+            pub = entry_pub(m)
+            duration = duration or int(m.get("duration") or 0)
             description = clean_text(m.get("description") or title) or title
-        except (ValueError, TypeError, KeyError):
+        except (subprocess.CalledProcessError, ValueError, TypeError, KeyError):
             pass
     if not pub:
-        pub = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        print(f"[{show['slug']}] {vid} has no real upload date; skipping restore",
+              file=sys.stderr)
+        return None
 
     return {
         "id": vid,
@@ -519,6 +530,25 @@ def main():
             # Only the newest SCAN_N videos are scanned. Nothing older can
             # ever be downloaded, even during a manual unlimited run.
             entries = list_channel(show)
+
+            if REPAIR_DATES:
+                by_id = {e["id"]: e for e in entries}
+                fixed = 0
+                for ep in eps:
+                    pub = entry_pub(by_id.get(ep["id"], {}))
+                    if pub and ep.get("pub") != pub:
+                        ep["pub"] = pub
+                        fixed += 1
+                eps.sort(key=lambda e: e["pub"], reverse=True)
+                sf.write_text(json.dumps(eps, indent=1))
+                feed_dir(slug).mkdir(parents=True, exist_ok=True)
+                (feed_dir(slug) / "feed.xml").write_text(build_feed(show, eps))
+                row["feed_count"] = len(feed_episodes(eps))
+                row["kept"] = len(eps)
+                print(f"repaired {fixed} dates for {slug} "
+                      f"({row['feed_count']} in feed)")
+                continue
+
             have = {x["id"] for x in eps}
             todo = [
                 e for e in entries
@@ -533,7 +563,7 @@ def main():
             downloads = [e for e in todo if e["id"] not in seen]
             for e in restore:
                 vid = e["id"]
-                ep = episode_from_release(show, vid)
+                ep = episode_from_release(show, vid, e)
                 if ep:
                     eps.append(ep)
                     row["new"].append((vid, f"{ep['title']} (restored, no download)"))
