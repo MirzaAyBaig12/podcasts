@@ -33,6 +33,7 @@ ART = int(CFG.get("art_size", 1400))
 SCAN_N = int(os.environ.get("SCAN_N") or CFG.get("scan_count", 1000))
 SHOW_SLUG = os.environ.get("SHOW_SLUG", "").strip()
 SHOWS = [s for s in CFG["shows"] if not SHOW_SLUG or s["slug"] == SHOW_SLUG]
+ALLOW_FAILURES = os.environ.get("ALLOW_FAILURES", "").lower() in ("1", "true", "yes")
 SKIP_LIVE = ("is_live", "is_upcoming", "post_live")
 
 
@@ -147,7 +148,7 @@ def release_exists(tag):
 
 
 def episode_from_release(show, vid):
-    """Rebuild a state entry from an existing release, with no download."""
+    """Rebuild state from an existing release using metadata only (no audio download)."""
     tag = f"{show['slug']}-yt-{vid}"
     r = subprocess.run(
         ["gh", "release", "view", tag, "--repo", REPO,
@@ -160,18 +161,41 @@ def episode_from_release(show, vid):
     asset = next((a for a in d.get("assets", []) if a["name"].endswith(".m4a")), None)
     if asset is None:
         return None
-    body = (d.get("body") or "").strip()
-    link = body if body.startswith("http") else f"https://www.youtube.com/watch?v={vid}"
+    link = f"https://www.youtube.com/watch?v={vid}"
     title = d.get("name") or vid
     pub = (d.get("publishedAt") or "").replace("Z", "+00:00")
+    duration = 0
+    description = title
+
+    # Real upload date/description come from YouTube metadata, never from the
+    # release timestamp (which is just the time CI uploaded the audio).
+    meta = subprocess.run(
+        ytdlp_base() + ["-J", "--skip-download", link],
+        capture_output=True, text=True,
+    )
+    if meta.returncode == 0:
+        try:
+            m = json.loads(meta.stdout)
+            ts = m.get("release_timestamp") or m.get("timestamp")
+            if ts:
+                pub = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
+            elif m.get("upload_date"):
+                pub = datetime.datetime.strptime(
+                    str(m["upload_date"]), "%Y%m%d"
+                ).replace(hour=12, tzinfo=datetime.timezone.utc).isoformat()
+            duration = int(m.get("duration") or 0)
+            description = clean_text(m.get("description") or title) or title
+        except (ValueError, TypeError, KeyError):
+            pass
     if not pub:
         pub = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
     return {
         "id": vid,
         "title": title,
-        "description": title,
+        "description": description,
         "pub": pub,
-        "duration": 0,
+        "duration": duration,
         "bytes": asset["size"],
         "audio_url": asset["url"],
         "link": link,
@@ -445,7 +469,9 @@ def main():
 
     build_index()
     write_summary(summary)
-    sys.exit(1 if failed else 0)
+    # Backfill runs report individual video failures but still let the chain
+    # continue; the regular scheduled run stays strict.
+    sys.exit(1 if failed and not ALLOW_FAILURES else 0)
 
 
 if __name__ == "__main__":
