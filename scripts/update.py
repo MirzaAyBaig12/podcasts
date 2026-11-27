@@ -513,13 +513,45 @@ def commit_checkpoint(slug):
                        check=False, capture_output=True, text=True)
         pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"],
                               cwd=ROOT, capture_output=True, text=True)
-        push = subprocess.run(["git", "push", "origin", "main"],
-                              cwd=ROOT, capture_output=True, text=True)
-        if pull.returncode == 0 and push.returncode == 0:
-            print(f"checkpoint pushed for {slug}")
-            return
-        print(f"checkpoint push retry {attempt}: "
-              f"{pull.stderr.strip()} {push.stderr.strip()}", file=sys.stderr)
+        err = pull.stderr.strip()
+        if pull.returncode == 0:
+            push = subprocess.run(["git", "push", "origin", "main"],
+                                  cwd=ROOT, capture_output=True, text=True)
+            if push.returncode == 0:
+                print(f"checkpoint pushed for {slug}")
+                return
+            err = push.stderr.strip()
+        else:
+            # During a rebase stage 3 is our own commit, so keep our version of
+            # any feed/state file that conflicts with upstream changes.
+            conflicted = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=U"],
+                cwd=ROOT, capture_output=True, text=True,
+            ).stdout.split()
+            if conflicted:
+                subprocess.run(["git", "checkout", "--theirs", "--", *conflicted],
+                               cwd=ROOT, check=False, capture_output=True, text=True)
+                subprocess.run(["git", "add", "-A"], cwd=ROOT, check=False)
+                env = dict(os.environ, GIT_EDITOR="true")
+                cont = subprocess.run(["git", "rebase", "--continue"],
+                                      cwd=ROOT, env=env, capture_output=True, text=True)
+                if cont.returncode != 0:
+                    # Our commit became empty after resolution; upstream has it.
+                    subprocess.run(["git", "rebase", "--skip"],
+                                   cwd=ROOT, env=env, capture_output=True, text=True)
+                    subprocess.run(["git", "rebase", "--abort"], cwd=ROOT,
+                                   check=False, capture_output=True, text=True)
+                    print(f"checkpoint already present for {slug}")
+                    return
+                push = subprocess.run(["git", "push", "origin", "main"],
+                                      cwd=ROOT, capture_output=True, text=True)
+                if push.returncode == 0:
+                    print(f"checkpoint pushed for {slug}")
+                    return
+                err = push.stderr.strip()
+        print(f"checkpoint push retry {attempt}: {err}", file=sys.stderr)
+        subprocess.run(["git", "rebase", "--abort"], cwd=ROOT,
+                       check=False, capture_output=True, text=True)
         time.sleep(15)
     raise RuntimeError(f"could not push checkpoint for {slug}")
 
