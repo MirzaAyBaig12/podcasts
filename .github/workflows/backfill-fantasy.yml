@@ -12,7 +12,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: backfill-fantasy
+  group: podcast-feeds
   cancel-in-progress: false
 
 jobs:

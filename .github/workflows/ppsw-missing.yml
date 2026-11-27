@@ -10,7 +10,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: ppsw-missing
+  group: podcast-feeds
   cancel-in-progress: false
 
 jobs:

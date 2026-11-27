@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: update-feeds
+  group: podcast-feeds
   cancel-in-progress: false
 
 jobs:

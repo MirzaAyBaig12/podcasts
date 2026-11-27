@@ -9,7 +9,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: backfill-swg
+  group: podcast-feeds
   cancel-in-progress: false
 
 jobs:

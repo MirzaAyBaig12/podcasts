@@ -14,7 +14,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: repair-dates
+  group: podcast-feeds
   cancel-in-progress: false
 
 jobs:
